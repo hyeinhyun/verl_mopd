@@ -82,6 +82,7 @@ teacher_models:
   teacher_model:
     _target_: verl.workers.config.DistillationTeacherModelConfig
     key: null
+    keys: []
     model_path: null
     num_replicas: 0
     inference:

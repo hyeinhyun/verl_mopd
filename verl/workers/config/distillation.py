@@ -117,7 +117,12 @@ class DistillationTeacherModelConfig(BaseConfig):
     """Configuration for on-policy distillation teacher.
 
     key (str, optional):
-        Identifier to route examples to the teacher model in multi-teacher setting.
+        Canonical identifier for this teacher; used as the dict key in ``teacher_models``
+        and as a routing value. Must be unique across teachers.
+    keys (list[str]):
+        Additional routing values this teacher will answer for beyond ``key``. A teacher
+        may serve many datasets, e.g. ``keys=['math500', 'aime']`` while ``key='gsm8k'``.
+        The full set of routing values is ``{key} ∪ set(keys)``.
     model_path (str, optional):
         Model path for the teacher model. Can be a local path or a Hugging Face model
     inference (RolloutConfig):
@@ -130,9 +135,10 @@ class DistillationTeacherModelConfig(BaseConfig):
         `num_replicas * per_replica_world_size`.
     """
 
-    _mutable_fields = BaseConfig._mutable_fields | {"num_replicas", "key"}
+    _mutable_fields = BaseConfig._mutable_fields | {"num_replicas", "key", "keys"}
 
     key: Optional[str] = None
+    keys: list[str] = field(default_factory=list)
     model_path: Optional[str] = None
     inference: RolloutConfig = field(default_factory=RolloutConfig)
     num_replicas: Optional[int] = 0
@@ -148,6 +154,17 @@ class DistillationTeacherModelConfig(BaseConfig):
     @property
     def world_size(self) -> int:
         return self.num_replicas * self.per_replica_world_size
+
+    @property
+    def all_routing_keys(self) -> list[str]:
+        """All routing values this teacher responds to: {key} ∪ keys."""
+        seen = set()
+        result = []
+        for k in [self.key] + self.keys:
+            if k and k not in seen:
+                seen.add(k)
+                result.append(k)
+        return result
 
     def check_configured(self):
         if self.model_path is None:
@@ -267,6 +284,16 @@ class DistillationConfig(BaseConfig):
                 f"the distillation resource pool size "
                 f"({self.n_gpus_per_node=} * {self.nnodes=} = {total_pool_size})."
             )
+
+        # Validate that every routing value maps to exactly one teacher.
+        routing_lookup: dict[str, str] = {}
+        for teacher_key, teacher in self.teacher_models.items():
+            for rv in teacher.all_routing_keys:
+                if rv in routing_lookup:
+                    raise ValueError(
+                        f"Routing value {rv!r} claimed by teachers {routing_lookup[rv]!r} and {teacher_key!r}."
+                    )
+                routing_lookup[rv] = teacher_key
 
     def _resolve_teacher_models(self) -> dict[str, DistillationTeacherModelConfig]:
         assert "teacher_model" in self.teacher_models

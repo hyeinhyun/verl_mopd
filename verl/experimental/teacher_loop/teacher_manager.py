@@ -95,21 +95,28 @@ class AsyncTeacherLLMServerManager:
             for key in self.teacher_model_configs
         }
 
+        # Flat routing table: routing_value -> canonical teacher key.
+        # Each teacher's `all_routing_keys` includes its `key` plus any extra `keys`.
+        self.routing_lookup: dict[str, str] = {}
+        for teacher_key, teacher in self.teacher_model_configs.items():
+            for rv in teacher.all_routing_keys:
+                self.routing_lookup[rv] = teacher_key
+
     def _resolve_teacher_key(self, routing_key: Optional[str]) -> str:
         if len(self.teacher_model_configs) == 1:
-            # Single-teacher path: route everything to the one teacher regardless of the sample's key.
             return next(iter(self.teacher_model_configs))
         if routing_key is None:
             raise ValueError(
                 f"Routing key is required for multi-teacher distillation "
                 f"(configured via distillation.teacher_key={self.teacher_key!r})."
             )
-        if routing_key not in self.teacher_model_configs:
+        teacher_key = self.routing_lookup.get(routing_key)
+        if teacher_key is None:
             raise ValueError(
-                f"No teacher configured for routing key {routing_key!r}. "
-                f"Configured teachers: {sorted(self.teacher_model_configs)}."
+                f"No teacher configured for routing value {routing_key!r}. "
+                f"Known routing values: {sorted(self.routing_lookup)}."
             )
-        return routing_key
+        return teacher_key
 
     async def compute_teacher_logprobs_single(
         self,
