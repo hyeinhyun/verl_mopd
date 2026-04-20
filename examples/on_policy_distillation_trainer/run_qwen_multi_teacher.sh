@@ -1,14 +1,22 @@
 #!/usr/bin/env bash
-# Multi-teacher on-policy distillation example (2 teachers, 8-GPU pool).
+# Multi-teacher on-policy distillation example (2 teachers, multiple datasets per teacher).
 #
-# Two teachers on a dedicated 8-GPU teacher pool. Each sample is routed by its
-# `data_source` column. One teacher may serve many datasets via the `keys` list:
-#   - math_teacher  (key=openai/gsm8k, keys=[math500])   <- 1 replica TP=1
-#   - code_teacher  (key=eurus_code, keys=[humaneval, mbpp]) <- 1 replica TP=1
+# Two teachers on a dedicated teacher pool. Each sample is routed by its `data_source`
+# column. One teacher may serve many datasets via the `keys` list:
+#   - math_teacher  (key=openai/gsm8k, keys=[math500, aime])
+#   - code_teacher  (key=eurus_code, keys=[humaneval, mbpp])
 #
-# Pool constraint: sum(num_replicas * per_replica_world_size) == n_gpus_per_node * nnodes.
-# Here: (1*1 + 1*1) * nnodes(4) doesn't apply — we use 4 GPUs each teacher = 4 replicas.
-# Actually: each teacher has num_replicas=4 with TP=1 => 4 GPUs each, total 8.
+# Data preparation:
+#   python scripts/add_data_source.py \
+#       -i data/gsm8k/train.parquet     -s "openai/gsm8k" \
+#       -i data/math500/train.parquet   -s "math500" \
+#       -i data/aime/train.parquet      -s "aime" \
+#       -i data/eurus/train.parquet     -s "eurus_code" \
+#       -i data/humaneval/train.parquet -s "humaneval" \
+#       -i data/mbpp/train.parquet      -s "mbpp" \
+#       --merge data/multi_teacher_train.parquet
+#
+# Pool constraint: sum(num_replicas * TP) == n_gpus_per_node * nnodes.
 set -xeuo pipefail
 
 ############################ Quick Config ############################
@@ -39,15 +47,19 @@ USE_DYNAMIC_BSZ=True
 STUDENT_WORLD_SIZE=4
 
 # Teacher pool: dedicated GPUs for all teachers.
-# num_replicas * per_replica_world_size (TP*DP*PP) = GPUs per teacher.
 MATH_TEACHER_NUM_REPLICAS=2
 CODE_TEACHER_NUM_REPLICAS=2
 TP=1
 TEACHER_POOL_WORLD_SIZE=$(( (MATH_TEACHER_NUM_REPLICAS + CODE_TEACHER_NUM_REPLICAS) * TP ))
 
-# Routing: `key` is the canonical teacher identifier; `keys` lists extra data_source values.
+# Routing column: samples are dispatched to teachers by this column.
 TEACHER_KEY_COLUMN=data_source
+
+# Each teacher's routing values. `key` is the canonical identifier;
+# `keys` lists additional data_source values this teacher handles.
+MATH_TEACHER_KEY="openai/gsm8k"
 MATH_TEACHER_EXTRA_KEYS='[math500, aime]'
+CODE_TEACHER_KEY="eurus_code"
 CODE_TEACHER_EXTRA_KEYS='[humaneval, mbpp]'
 
 SP=1
@@ -58,14 +70,10 @@ ENFORCE_EAGER=True
 
 ############################ Paths ############################
 
-# Datasets must carry a `data_source` column. Use scripts/add_data_source.py to tag parquets.
-math_train_path=${DATA_PATH}/gsm8k/train.parquet
-math_test_path=${DATA_PATH}/gsm8k/test.parquet
-code_train_path=${DATA_PATH}/eurus_code/train.parquet
-code_test_path=${DATA_PATH}/eurus_code/test.parquet
-
-TRAIN_FILES="['$math_train_path', '$code_train_path']"
-TEST_FILES="['$math_test_path', '$code_test_path']"
+# Use a single merged parquet with data_source column pre-tagged.
+# See header comment for how to create it with scripts/add_data_source.py.
+TRAIN_FILES="['${DATA_PATH}/multi_teacher_train.parquet']"
+TEST_FILES="['${DATA_PATH}/multi_teacher_test.parquet']"
 
 ############################ Parameter Groups ############################
 
@@ -110,11 +118,11 @@ DISTILLATION=(
     distillation.nnodes=1
     distillation.teacher_key=$TEACHER_KEY_COLUMN
 
-    # Math teacher: key=openai/gsm8k, also serves math500 + aime.
-    $(teacher_block math_teacher "openai/gsm8k" "$MATH_TEACHER_EXTRA_KEYS" "$MATH_TEACHER_MODEL" $MATH_TEACHER_NUM_REPLICAS)
+    # Math teacher: serves openai/gsm8k + math500 + aime
+    $(teacher_block math_teacher "$MATH_TEACHER_KEY" "$MATH_TEACHER_EXTRA_KEYS" "$MATH_TEACHER_MODEL" $MATH_TEACHER_NUM_REPLICAS)
 
-    # Code teacher: key=eurus_code, also serves humaneval + mbpp.
-    $(teacher_block code_teacher "eurus_code" "$CODE_TEACHER_EXTRA_KEYS" "$CODE_TEACHER_MODEL" $CODE_TEACHER_NUM_REPLICAS)
+    # Code teacher: serves eurus_code + humaneval + mbpp
+    $(teacher_block code_teacher "$CODE_TEACHER_KEY" "$CODE_TEACHER_EXTRA_KEYS" "$CODE_TEACHER_MODEL" $CODE_TEACHER_NUM_REPLICAS)
 
     distillation.distillation_loss.loss_mode=$DISTILLATION_LOSS_MODE
     distillation.distillation_loss.topk=64
