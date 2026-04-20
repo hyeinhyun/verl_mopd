@@ -6,15 +6,15 @@
 #   - math_teacher  (key=openai/gsm8k, keys=[math500, aime])
 #   - code_teacher  (key=eurus_code, keys=[humaneval, mbpp])
 #
-# Data preparation:
-#   python scripts/add_data_source.py \
-#       -i data/gsm8k/train.parquet     -s "openai/gsm8k" \
-#       -i data/math500/train.parquet   -s "math500" \
-#       -i data/aime/train.parquet      -s "aime" \
-#       -i data/eurus/train.parquet     -s "eurus_code" \
-#       -i data/humaneval/train.parquet -s "humaneval" \
-#       -i data/mbpp/train.parquet      -s "mbpp" \
-#       --merge data/multi_teacher_train.parquet
+# Data preparation (tag each file individually, no merging needed):
+#   python scripts/add_data_source.py -i data/gsm8k/train.parquet     -s "openai/gsm8k"
+#   python scripts/add_data_source.py -i data/math500/train.parquet   -s "math500"
+#   python scripts/add_data_source.py -i data/aime/train.parquet      -s "aime"
+#   python scripts/add_data_source.py -i data/eurus/train.parquet     -s "eurus_code"
+#   python scripts/add_data_source.py -i data/humaneval/train.parquet -s "humaneval"
+#   python scripts/add_data_source.py -i data/mbpp/train.parquet      -s "mbpp"
+#
+# Then list all tagged files in TRAIN_FILES below. verl loads them all automatically.
 #
 # Pool constraint: sum(num_replicas * TP) == n_gpus_per_node * nnodes.
 set -xeuo pipefail
@@ -70,10 +70,10 @@ ENFORCE_EAGER=True
 
 ############################ Paths ############################
 
-# Use a single merged parquet with data_source column pre-tagged.
-# See header comment for how to create it with scripts/add_data_source.py.
-TRAIN_FILES="['${DATA_PATH}/multi_teacher_train.parquet']"
-TEST_FILES="['${DATA_PATH}/multi_teacher_test.parquet']"
+# List all tagged parquet files. verl concatenates them internally.
+# Each file must have a `data_source` column matching one of the teacher routing values.
+TRAIN_FILES="['${DATA_PATH}/gsm8k/train_tagged.parquet','${DATA_PATH}/math500/train_tagged.parquet','${DATA_PATH}/aime/train_tagged.parquet','${DATA_PATH}/eurus_code/train_tagged.parquet','${DATA_PATH}/humaneval/train_tagged.parquet','${DATA_PATH}/mbpp/train_tagged.parquet']"
+TEST_FILES="['${DATA_PATH}/gsm8k/test_tagged.parquet','${DATA_PATH}/eurus_code/test_tagged.parquet']"
 
 ############################ Parameter Groups ############################
 
