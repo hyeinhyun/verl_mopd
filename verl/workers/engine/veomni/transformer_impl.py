@@ -196,8 +196,8 @@ class VeOmniEngine(FSDPEngine):
     def _build_model_optimizer(self):
         # Load base model with specified configuration and dtype
         module = build_foundation_model(
-            config_path=self.model_config.hf_config_path,
-            weights_path=self.model_config.path,
+            config_path=self.model_config.local_hf_config_path,
+            weights_path=self.model_config.local_path,
             torch_dtype="float32" if self.engine_config.mixed_precision else "bfloat16",
             attn_implementation=self.engine_config.attn_implementation,
             moe_implementation=self.engine_config.moe_implementation,
@@ -210,7 +210,7 @@ class VeOmniEngine(FSDPEngine):
         module = build_parallelize_model(
             module,
             init_device=self.engine_config.init_device,
-            weights_path=self.model_config.path,
+            weights_path=self.model_config.local_path,
             enable_full_shard=self.engine_config.enable_full_shard,
             enable_mixed_precision=self.engine_config.mixed_precision,
             enable_gradient_checkpointing=self.model_config.enable_gradient_checkpointing,
@@ -523,13 +523,15 @@ class OmniSequenceShardCollator:
     padding_features: dict[str, int] = field(
         default_factory=lambda: {
             "pixel_values": 0,
+            "pixel_values_videos": 0,
         },
         metadata={"help": "features to padding sequence dimension."},
     )
 
     # padding scale for padding features
     padding_scale: dict[str, int] = field(
-        default_factory=lambda: {"pixel_values": 4}, metadata={"help": "padding scale for padding features."}
+        default_factory=lambda: {"pixel_values": 4, "pixel_values_videos": 4},
+        metadata={"help": "padding scale for padding features."},
     )
 
     def __post_init__(self):
@@ -614,7 +616,6 @@ def _prepare_veomni_flash_attention_kwargs(position_ids: torch.Tensor) -> dict[s
 @EngineRegistry.register(model_type="language_model", backend=["veomni"], device=["cuda", "npu"])
 class VeOmniEngineWithLMHead(VeOmniEngine, FSDPEngineWithLMHead):
     def prepare_model_inputs(self, micro_batch: TensorDict):
-        # TODO: Cannot work properly for qwen_vl ulysses
         model_inputs, output_args = super().prepare_model_inputs(micro_batch)
         input_ids_rmpad = model_inputs["input_ids"]
         sp_enabled = parallel_state.get_parallel_state().sp_enabled
